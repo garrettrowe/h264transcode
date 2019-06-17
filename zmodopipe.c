@@ -68,478 +68,484 @@ int main(int argc, char**argv)
     srand(time(0));
     while (1)
     {
-    char pipename[256];
-    char ffCmd[2048];
-    struct addrinfo hints, *server;
-    struct sockaddr_in serverAddr;
-    int retval = 0;
-    char recvBuf[2048];
-    struct sigaction sapipe, oldsapipe, saterm, oldsaterm, saint, oldsaint, sahup, oldsahup;
-    char opt;
-    int loopIdx;
-    int outPipe = -1;
+        char pipename[256];
+        char ffCmd[2048];
+        struct addrinfo hints, *server;
+        struct sockaddr_in serverAddr;
+        int retval = 0;
+        char recvBuf[2048];
+        struct sigaction sapipe, oldsapipe, saterm, oldsaterm, saint, oldsaint, sahup, oldsahup;
+        char opt;
+        int loopIdx;
+        int outPipe = -1;
 #ifdef DOMAIN_SOCKETS
-    struct sockaddr_un addr;
+        struct sockaddr_un addr;
 #endif
-    int sockFd = -1;
-    struct timeval tv;
+        int sockFd = -1;
+        struct timeval tv;
 #ifdef NON_BLOCK_READ
-    struct timeval tv, tv_sel;
+        struct timeval tv, tv_sel;
 #endif
-    struct linger lngr;
-    int status = 0;
-    int pid = 0;
-    
-    lngr.l_onoff = false;
-    lngr.l_linger = 0;
-    
-    // Process arguments
-    // Clear and set defaults
-    memset(&globalArgs, 0, sizeof(globalArgs));
-    
-    globalArgs.hostname =
-    globalArgs.pipeName = "zmodo";
-    
-    // Read command-line
-    while( ((opt = getopt(argc, argv, optString)) != -1) && (opt != 255))
-    {
-        switch( opt )
-        {
-            case 'v':
-                globalArgs.verbose = true;
-                break;
-            case 'c':
-                globalArgs.channel[atoi(optarg) - 1] = true;
-                break;
-            case 'n':
-                globalArgs.pipeName = optarg;
-                break;
-            case 's':
-                globalArgs.hostname = optarg;
-                break;
-            case 'p':
-                globalArgs.port = atoi(optarg);
-                break;
-            case 't':
-                globalArgs.timer = atoi(optarg);
-                break;
-            case 'h':
-                // Fall through
-            case '?':
-                // Fall through
-            default:
-                display_usage(argv[0]);
-                return 0;
-        }
-    }
-    
-    // Set up default values based on provided values (if any)
-    if( !globalArgs.port )
-    {
-        globalArgs.port = 9000;
-    }
-    
-    memset(&saint, 0, sizeof(saint));
-    memset(&saterm, 0, sizeof(saterm));
-    memset(&sahup, 0, sizeof(sahup));
-    
-    // Ignore SIGPIPE
-    sapipe.sa_handler = sigHandler;
-    sigaction(SIGPIPE, &sapipe, &oldsapipe);
-    
-    // Handle SIGTERM & SIGING
-    saterm.sa_handler = sigHandler;
-    sigaction(SIGTERM, &saterm, &oldsaterm);
-    saint.sa_handler = sigHandler;
-    sigaction(SIGINT, &saint, &oldsaint);
-    
-    signal( SIGUSR1, SIG_IGN );		// Ignore SIGUSR1 in parent process
-    
-    // SIGUSR2 is used to reset the pipe and connection
-    sahup.sa_handler = sigHandler;
-    sigaction(SIGUSR2, &sahup, &oldsahup);
-    
-    memset(&serverAddr, 0, sizeof(serverAddr));
-    serverAddr.sin_family = AF_INET;
-    
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_protocol = IPPROTO_TCP;
-    retval = getaddrinfo(globalArgs.hostname, NULL, &hints, &server);
-    if( retval != 0 )
-    {
-        printMessage(false, "getaddrinfo failed: %s\n", gai_strerror(retval));
-        return 1;
-    }
-    
-    serverAddr.sin_addr = ((struct sockaddr_in*)server->ai_addr)->sin_addr;
-    serverAddr.sin_port = htons(globalArgs.port);
-
-    do
-    {
-        if( pid )
-        {
-            printMessage(true, "Child %i returned: %i\n", pid, status);
-            
-            if( g_cleanUp == 2 )
-                g_cleanUp = false;	// Ignore SIGHUP
-        }
+        struct linger lngr;
+        int status = 0;
+        int pid = 0;
         
-        // Create a fork for each camera channel to stream
-        for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+        lngr.l_onoff = false;
+        lngr.l_linger = 0;
+        
+        // Process arguments
+        // Clear and set defaults
+        memset(&globalArgs, 0, sizeof(globalArgs));
+        
+        globalArgs.hostname =
+        globalArgs.pipeName = "zmodo";
+        
+        // Read command-line
+        while( ((opt = getopt(argc, argv, optString)) != -1) && (opt != 255))
         {
-            //static bool hitFirst = false;
-            if( globalArgs.channel[loopIdx] == true )
+            switch( opt )
             {
-                // Always fork if we're starting up, or if the pid of the dead child process matches
-                if( pid == 0 || g_childPids[loopIdx] == pid )
-                    g_childPids[loopIdx] = fork();
-                
-                // Child Process
-                if( g_childPids[loopIdx] == 0 )
-                {
-                    // SIGUSR1 is used to reset the pipe and connection
-                    sahup.sa_handler = sigHandler;
-                    sigaction(SIGUSR1, &sahup, &oldsahup);
-                    
-                    memset(g_childPids, 0, sizeof(g_childPids));
-                    g_processCh = loopIdx;
+                case 'v':
+                    globalArgs.verbose = true;
                     break;
-                }
-                // Error
-                else if( g_childPids[loopIdx] == -1 )
-                {
-                    printMessage(false, "fork failed\n");
-                    return 1;
-                }
+                case 'c':
+                    globalArgs.channel[atoi(optarg) - 1] = true;
+                    break;
+                case 'n':
+                    globalArgs.pipeName = optarg;
+                    break;
+                case 's':
+                    globalArgs.hostname = optarg;
+                    break;
+                case 'p':
+                    globalArgs.port = atoi(optarg);
+                    break;
+                case 't':
+                    globalArgs.timer = atoi(optarg);
+                    break;
+                case 'h':
+                    // Fall through
+                case '?':
+                    // Fall through
+                default:
+                    display_usage(argv[0]);
+                    return 0;
             }
         }
-    }
-    while( (pid = wait(&status)) > 0  && g_cleanUp != true );
-    
-    if( g_processCh != -1 )
-    {
-        // At this point, g_processCh contains the camera number to use
-        sprintf(pipename, "/tmp/cam%irand%i", g_processCh, rand());
         
-        tv.tv_sec = 5;		// Wait 5 seconds for socket data
-        tv.tv_usec = 0;
+        // Set up default values based on provided values (if any)
+        if( !globalArgs.port )
+        {
+            globalArgs.port = 9000;
+        }
         
-        FILE *ffmpegP = NULL;
+        memset(&saint, 0, sizeof(saint));
+        memset(&saterm, 0, sizeof(saterm));
+        memset(&sahup, 0, sizeof(sahup));
         
-        sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", pipename, g_processCh+1);
+        // Ignore SIGPIPE
+        sapipe.sa_handler = sigHandler;
+        sigaction(SIGPIPE, &sapipe, &oldsapipe);
         
+        // Handle SIGTERM & SIGING
+        saterm.sa_handler = sigHandler;
+        sigaction(SIGTERM, &saterm, &oldsaterm);
+        saint.sa_handler = sigHandler;
+        sigaction(SIGINT, &saint, &oldsaint);
         
-#ifndef DOMAIN_SOCKETS
-        //unlink(pipename);
-        retval = mkfifo(pipename, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+        signal( SIGUSR1, SIG_IGN );		// Ignore SIGUSR1 in parent process
         
+        // SIGUSR2 is used to reset the pipe and connection
+        sahup.sa_handler = sigHandler;
+        sigaction(SIGUSR2, &sahup, &oldsahup);
+        
+        memset(&serverAddr, 0, sizeof(serverAddr));
+        serverAddr.sin_family = AF_INET;
+        
+        memset(&hints, 0, sizeof(hints));
+        hints.ai_family = AF_INET;
+        hints.ai_protocol = IPPROTO_TCP;
+        retval = getaddrinfo(globalArgs.hostname, NULL, &hints, &server);
         if( retval != 0 )
         {
-            sprintf(g_errBuf, "Ch %i: Failed to create pipe\n", g_processCh+1);
-            perror(g_errBuf);
-            
+            printMessage(false, "getaddrinfo failed: %s\n", gai_strerror(retval));
+            return 1;
         }
         
-#endif	
+        serverAddr.sin_addr = ((struct sockaddr_in*)server->ai_addr)->sin_addr;
+        serverAddr.sin_port = htons(globalArgs.port);
         
-        while( !g_cleanUp )
+        do
         {
-            int flag = true;
+            if( pid )
+            {
+                printMessage(true, "Child %i returned: %i\n", pid, status);
+                
+                if( g_cleanUp == 2 )
+                    g_cleanUp = false;	// Ignore SIGHUP
+            }
+            
+            // Create a fork for each camera channel to stream
+            for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+            {
+                //static bool hitFirst = false;
+                if( globalArgs.channel[loopIdx] == true )
+                {
+                    // Always fork if we're starting up, or if the pid of the dead child process matches
+                    if( pid == 0 || g_childPids[loopIdx] == pid )
+                        g_childPids[loopIdx] = fork();
+                    
+                    // Child Process
+                    if( g_childPids[loopIdx] == 0 )
+                    {
+                        // SIGUSR1 is used to reset the pipe and connection
+                        sahup.sa_handler = sigHandler;
+                        sigaction(SIGUSR1, &sahup, &oldsahup);
+                        
+                        memset(g_childPids, 0, sizeof(g_childPids));
+                        g_processCh = loopIdx;
+                        break;
+                    }
+                    // Error
+                    else if( g_childPids[loopIdx] == -1 )
+                    {
+                        printMessage(false, "fork failed\n");
+                        return 1;
+                    }
+                }
+            }
+        }
+        while( (pid = wait(&status)) > 0  && g_cleanUp != true );
+        
+        if( g_processCh != -1 )
+        {
+            // At this point, g_processCh contains the camera number to use
+            sprintf(pipename, "/tmp/cam%irand%i", g_processCh, rand());
+            
+            tv.tv_sec = 10;		// Wait 5 seconds for socket data
+            tv.tv_usec = 0;
+            
+            FILE *ffmpegP = NULL;
+            
+            sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", pipename, g_processCh+1);
+            
+            
+#ifndef DOMAIN_SOCKETS
+            //unlink(pipename);
+            retval = mkfifo(pipename, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
+            
+            if( retval != 0 )
+            {
+                sprintf(g_errBuf, "Ch %i: Failed to create pipe\n", g_processCh+1);
+                perror(g_errBuf);
+                
+            }
+            
+#endif	
+            
+            while( !g_cleanUp )
+            {
+                int flag = true;
 #ifdef NON_BLOCK_READ
-            fd_set readfds;
+                fd_set readfds;
 #endif
-            // Initialize the socket and connect
-            sockFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            
-            if( setsockopt(sockFd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)))
-            {
-                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set socket timeout\n");
-                perror(g_errBuf);
-            }
-            
-            if( setsockopt(sockFd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag)))
-            {
-                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set TCP_NODELAY\n");
-                perror(g_errBuf);
-            }
-            if( setsockopt(sockFd, SOL_SOCKET, SO_LINGER, (char*)&lngr, sizeof(lngr)))
-            {
-                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set SO_LINGER\n");
-                perror(g_errBuf);
-            }
-            
-            retval = connect(sockFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
-            
-            if( globalArgs.verbose )
-                printMessage(true, "Connect result: %i\n", retval);
-            
-            if( retval == -1 && errno != EINPROGRESS )
-            {
-                int sleeptime = 10;
+                // Initialize the socket and connect
+                sockFd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+                
+                if( setsockopt(sockFd, SOL_SOCKET, SO_RCVTIMEO, (char*)&tv, sizeof(tv)))
+                {
+                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set socket timeout\n");
+                    perror(g_errBuf);
+                }
+                
+                if( setsockopt(sockFd, IPPROTO_TCP, TCP_NODELAY, (char*)&flag, sizeof(flag)))
+                {
+                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set TCP_NODELAY\n");
+                    perror(g_errBuf);
+                }
+                if( setsockopt(sockFd, SOL_SOCKET, SO_LINGER, (char*)&lngr, sizeof(lngr)))
+                {
+                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set SO_LINGER\n");
+                    perror(g_errBuf);
+                }
+                
+                retval = connect(sockFd, (struct sockaddr*)&serverAddr, sizeof(serverAddr));
                 
                 if( globalArgs.verbose )
-                {
-                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to connect\n");
-                    perror(g_errBuf);
-                    printMessage(true, "Waiting %i seconds.\n", sleeptime);
-                }
-                close(sockFd);
-                sockFd = -1;
-                sleep(sleeptime);
-                continue;
-            }
-            
-            if( retval == -1 && errno != EINPROGRESS )
-            {
+                    printMessage(true, "Connect result: %i\n", retval);
                 
-                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to connect\n");
-                perror(g_errBuf);
-                return 1;
-            }
-            
-            retval = 0;
-            
-            if( ConnectViaMedia(sockFd, g_processCh) != 0 )
-            {
-                printMessage(true, "Login failed, bailing.\nDid you select the right model?\n");
-                close(sockFd);
-                sockFd = -1;
-                return 1;
-            }
-#ifdef NON_BLOCK_READ
-            if( fcntl(sockFd, F_SETFL, O_NONBLOCK) == -1 )	// non-blocking sockets
-            {
-                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set O_NONBLOCK\n");
-                perror(g_errBuf);
-            }
-            FD_ZERO(&readfds);
-            FD_SET(sockFd, &readfds	);
-#endif
-            // the stream sometimes goes grey,
-            // this alarm should periodically reset the stream
-            if(globalArgs.timer)
-                alarm(globalArgs.timer);
-            
-            // Now we are connected and awaiting stream
-            do
-            {
-                int read = 0;
-#ifdef NON_BLOCK_READ
-                tv_sel.tvsec = 0;
-                tv_sel.tv_usec = 10000;	// Wait 10 ms
-                
-                if( select( sockFd+1, &readfds, NULL, NULL, &tv_sel) == -1)
+                if( retval == -1 && errno != EINPROGRESS )
                 {
-                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Select failed\n");
-                    perror(g_errBuf);
+                    int sleeptime = 10;
                     
+                    if( globalArgs.verbose )
+                    {
+                        sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to connect\n");
+                        perror(g_errBuf);
+                        printMessage(true, "Waiting %i seconds.\n", sleeptime);
+                    }
                     close(sockFd);
                     sockFd = -1;
-                    break;			// Connection may have died, reset
+                    sleep(sleeptime);
+                    continue;
                 }
                 
-                if (!FD_ISSET(sockFd, &readfds))
+                if( retval == -1 && errno != EINPROGRESS )
                 {
-                    if( globalArgs.verbose )
-                        printMessage(true, "Read would block\n");
-                    continue;		// Not ready yet
+                    
+                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to connect\n");
+                    perror(g_errBuf);
+                    return 1;
                 }
-#endif
                 
-                read  = recv(sockFd, recvBuf, sizeof(recvBuf), 0);
+                retval = 0;
                 
-                // Server disconnected, close the socket so we can try to reconnect
-                if( read <= 0 )
+                if( ConnectViaMedia(sockFd, g_processCh) != 0 )
                 {
+                    printMessage(true, "Login failed, bailing.\nDid you select the right model?\n");
+                    close(sockFd);
+                    sockFd = -1;
+                    return 1;
+                }
 #ifdef NON_BLOCK_READ
-                    if( errno == EAGAIN || errno == EWOULDBLOCK )
+                if( fcntl(sockFd, F_SETFL, O_NONBLOCK) == -1 )	// non-blocking sockets
+                {
+                    sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Failed to set O_NONBLOCK\n");
+                    perror(g_errBuf);
+                }
+                FD_ZERO(&readfds);
+                FD_SET(sockFd, &readfds	);
+#endif
+                // the stream sometimes goes grey,
+                // this alarm should periodically reset the stream
+                if(globalArgs.timer)
+                    alarm(globalArgs.timer);
+                
+                // Now we are connected and awaiting stream
+                do
+                {
+                    int read = 0;
+#ifdef NON_BLOCK_READ
+                    tv_sel.tv_sec = 10;
+                    tv_sel.tv_usec = 0;
+                    
+                    if( select( sockFd+1, &readfds, NULL, NULL, &tv_sel) == -1)
+                    {
+                        sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Select failed\n");
+                        perror(g_errBuf);
+                        
+                        close(sockFd);
+                        sockFd = -1;
+                        break;			// Connection may have died, reset
+                    }
+                    
+                    if (!FD_ISSET(sockFd, &readfds))
                     {
                         if( globalArgs.verbose )
                             printMessage(true, "Read would block\n");
-                        continue;
+                        continue;		// Not ready yet
                     }
 #endif
-                    if( globalArgs.verbose )
-                        printMessage(true, "Socket closed. Receive result: %i\n", read);
                     
-                    close(sockFd);
-                    sockFd = -1;
-                    break;
-                }
-                
-                
-                
-
-                             
-                if( globalArgs.verbose )
-                {
-                    printf(".");
-                    fflush(stdout);
-                }
-                
-#ifdef DOMAIN_SOCKETS
-                if( outPipe == -1 )
-                {
-                    outPipe = socket(AF_UNIX, SOCK_STREAM, 0);
-                    if( outPipe == -1 )
-                        perror("Error creating socket\n");
+                    read  = recv(sockFd, recvBuf, sizeof(recvBuf), 0);
                     
-                    memset(&addr, 0, sizeof(addr));
-                    addr.sun_family = AF_UNIX;
-                    strncpy(addr.sun_path, pipename, sizeof(addr.sun_path) - 1);
-                    
-                    if( bind(outPipe, (struct sockaddr*)&addr, sizeof(addr)) == -1 )
-                        perror("Error binding socket\n");
-                    if(ffmpegP == NULL){
-                        printMessage(true, "opening ffmpeg\n");
-                        ffmpegP = popen (ffCmd, "r");
-                        if (!ffmpegP)
-                        {
-                            printMessage(true, "failed to open ffmpeg\n");
-                        }
-                    }
-                }
-                
-#else
-                // Open the pipe if it wasn't previously opened
-                
-                if( outPipe == -1 ){
-                    outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
-                    if(ffmpegP == NULL){
-                        printMessage(true, "opening ffmpeg\n");
-                        ffmpegP = popen (ffCmd, "r");
-                        if (!ffmpegP)
-                        {
-                            printMessage(true, "failed to open ffmpeg\n");
-                        }
-                    }
-                }
-                
-#endif
-                
-                struct stat st;
-                char fileloc[256];
-                sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
-                stat(fileloc, &st);
-                int fsize1 = st.st_size;
-                
-                if( fsize1 < 2500 && fsize1 > 10 ){
-                    printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
-                    remove(fileloc);
-                    pclose (ffmpegP);
-                    ffmpegP = NULL;
-                    close(sockFd);
-                    sockFd = -1;
-                    break;
-                }
-                time_t rawtime;
-                time ( &rawtime );
-                
-                if( difftime(rawtime, st.st_mtime) > 30 ){
-                    printMessage(true, "Stream %i FFMpeg output lagging, restarting FFMpeg\n",g_processCh+1);
-                    pclose (ffmpegP);
-                    ffmpegP = NULL;
-                    ffmpegP = popen (ffCmd, "r");
-                    
-                    struct utimbuf new_times;
-                    new_times.actime = st.st_atime;
-                    new_times.modtime = time(NULL);
-                    utime(fileloc, &new_times);
-                }
-                
-                // send to pipe
-                if( outPipe != -1 )
-                {       
-                    if( (retval = write(outPipe, recvBuf, read)) == -1)
+                    // Server disconnected, close the socket so we can try to reconnect
+                    if( read <= 0 )
                     {
+#ifdef NON_BLOCK_READ
                         if( errno == EAGAIN || errno == EWOULDBLOCK )
                         {
                             if( globalArgs.verbose )
-                                printMessage(true, "\nCh %i: %s", g_processCh+1, "Reader isn't reading fast enough, discarding data. Not enough processing power?\n");
-                            
+                                printMessage(true, "Read would block\n");
                             continue;
                         }
-                        // reader closed the pipe, wait for it to be opened again.
-                        else if( globalArgs.verbose )
-                        {
-                            sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Pipe closed\n");
-                            perror(g_errBuf);
-                        }
-                        
-#ifndef DOMAIN_SOCKETS
-                        printMessage(true, "Closing ffmpeg\n");
-                        pclose (ffmpegP);
-                        ffmpegP = NULL;
-                        close(outPipe);
-                        outPipe = -1;
-                        
 #endif
+                        if( globalArgs.verbose )
+                            printMessage(true, "Socket closed. Receive result: %i\n", read);
+                        
                         close(sockFd);
                         sockFd = -1;
-                        continue;
+                        break;
                     }
-                    else
+                    
+                    
+                    
+                    
+                    
+                    if( globalArgs.verbose )
                     {
-                        if( globalArgs.verbose )
+                        printf(".");
+                        fflush(stdout);
+                    }
+                    
+#ifdef DOMAIN_SOCKETS
+                    if( outPipe == -1 )
+                    {
+                        outPipe = socket(AF_UNIX, SOCK_STREAM, 0);
+                        if( outPipe == -1 )
+                            perror("Error creating socket\n");
+                        
+                        memset(&addr, 0, sizeof(addr));
+                        addr.sun_family = AF_UNIX;
+                        strncpy(addr.sun_path, pipename, sizeof(addr.sun_path) - 1);
+                        
+                        if( bind(outPipe, (struct sockaddr*)&addr, sizeof(addr)) == -1 )
+                            perror("Error binding socket\n");
+                        if(ffmpegP == NULL){
+                            printMessage(true, "opening ffmpeg\n");
+                            ffmpegP = popen (ffCmd, "r");
+                            if (!ffmpegP)
+                            {
+                                printMessage(true, "failed to open ffmpeg\n");
+                            }
+                        }
+                    }
+                    
+#else
+                    // Open the pipe if it wasn't previously opened
+                    
+                    if( outPipe == -1 ){
+                        outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
+                        if(ffmpegP == NULL){
+                            printMessage(true, "opening ffmpeg\n");
+                            ffmpegP = popen (ffCmd, "r");
+                            if (!ffmpegP)
+                            {
+                                printMessage(true, "failed to open ffmpeg\n");
+                            }
+                        }
+                    }
+                    
+#endif
+                    
+                    struct stat st;
+                    char fileloc[256];
+                    sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
+                    stat(fileloc, &st);
+                    int fsize1 = st.st_size;
+                    
+                    if( fsize1 < 2500 && fsize1 > 10 ){
+                        printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
+                        remove(fileloc);
+                        pclose (ffmpegP);
+                        ffmpegP = NULL;
+                        close(sockFd);
+                        sockFd = -1;
+                        break;
+                    }
+                    time_t rawtime;
+                    time ( &rawtime );
+                    
+                    int dt = difftime(rawtime, st.st_mtime);
+                    
+                    if(  dt > 30 && dt < 40000 ){
+                        printMessage(true, "Stream %i FFMpeg output lagging by %i, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
+                        remove(fileloc);
+                        pclose (ffmpegP);
+                        ffmpegP = NULL;
+                        close(sockFd);
+                        sockFd = -1;
+                        break;
+                        /*
+                         struct utimbuf new_times;
+                         new_times.actime = st.st_atime;
+                         new_times.modtime = time(NULL);
+                         utime(fileloc, &new_times);
+                         */
+                    }
+                    
+                    // send to pipe
+                    if( outPipe != -1 )
+                    {
+                        if( (retval = write(outPipe, recvBuf, read)) == -1)
                         {
-                            printf("\b \b");
-                            fflush(stdout);
+                            if( errno == EAGAIN || errno == EWOULDBLOCK )
+                            {
+                                if( globalArgs.verbose )
+                                    printMessage(true, "\nCh %i: %s", g_processCh+1, "Reader isn't reading fast enough, discarding data. Not enough processing power?\n");
+                                
+                                continue;
+                            }
+                            // reader closed the pipe, wait for it to be opened again.
+                            else if( globalArgs.verbose )
+                            {
+                                sprintf(g_errBuf, "Ch %i: %s", g_processCh+1, "Pipe closed\n");
+                                perror(g_errBuf);
+                            }
+                            
+#ifndef DOMAIN_SOCKETS
+                            printMessage(true, "Closing ffmpeg\n");
+                            pclose (ffmpegP);
+                            ffmpegP = NULL;
+                            close(outPipe);
+                            outPipe = -1;
+                            
+#endif
+                            close(sockFd);
+                            sockFd = -1;
+                            continue;
+                        }
+                        else
+                        {
+                            if( globalArgs.verbose )
+                            {
+                                printf("\b \b");
+                                fflush(stdout);
+                            }
+                        }
+                    }
+                }
+                while( sockFd != -1 && !g_cleanUp );
+                
+                // If we receive a SIGUSR1, close and reset everything
+                // Then start the loop over again.
+                if( g_cleanUp >= 2 )
+                {
+                    g_cleanUp = false;
+                    
+                    if( sockFd != -1 )
+                        close(sockFd);
+                    
+                    sockFd = -1;
+                    
+                    if( g_cleanUp != 3 )
+                    {
+                        if( outPipe != -1 ){
+                            pclose (ffmpegP);
+                            ffmpegP = NULL;
+                            close(outPipe);
+                            outPipe = -1;
                         }
                     }
                 }
             }
-            while( sockFd != -1 && !g_cleanUp );
+            if( globalArgs.verbose )
+                printMessage(true, "Exiting loop: %i\n", g_cleanUp);
+            // Received signal to exit, cleanup
+            printMessage(true, "closing ffmpeg\n");
             
-            // If we receive a SIGUSR1, close and reset everything
-            // Then start the loop over again.
-            if( g_cleanUp >= 2 )
-            {
-                g_cleanUp = false;
-                
-                if( sockFd != -1 )
-                    close(sockFd);
-                
-                sockFd = -1;
-                
-                if( g_cleanUp != 3 )
-                {
-                    if( outPipe != -1 ){
-                        pclose (ffmpegP);
-                        ffmpegP = NULL;
-                        close(outPipe);
-                        outPipe = -1;
-                    }
-                }
-            }
+            pclose (ffmpegP);
+            ffmpegP = NULL;
+            
+            close(outPipe);
+            outPipe = -1;
+            close(sockFd);
+            unlink(pipename);
         }
-        if( globalArgs.verbose )
-            printMessage(true, "Exiting loop: %i\n", g_cleanUp);
-        // Received signal to exit, cleanup
-        printMessage(true, "closing ffmpeg\n");
         
-        pclose (ffmpegP);
-        ffmpegP = NULL;
+        // Restore old signal handler
+        sigaction(SIGPIPE, &oldsapipe, NULL);
+        sigaction(SIGTERM, &oldsaterm, NULL);
+        sigaction(SIGINT, &oldsaint, NULL);
+        sigaction(SIGUSR1, &oldsahup, NULL);
+        freeaddrinfo(server);
         
-        close(outPipe);
-        outPipe = -1;
-        close(sockFd);
-        unlink(pipename);
-    }
-    
-    // Restore old signal handler
-    sigaction(SIGPIPE, &oldsapipe, NULL);
-    sigaction(SIGTERM, &oldsaterm, NULL);
-    sigaction(SIGINT, &oldsaint, NULL);
-    sigaction(SIGUSR1, &oldsahup, NULL);
-    freeaddrinfo(server);
-    
-    // Kill all children (if any)
-    for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
-    {
-        if( globalArgs.channel[loopIdx] > 0 )
-            kill( globalArgs.channel[loopIdx], SIGTERM );
-    }
+        // Kill all children (if any)
+        for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+        {
+            if( globalArgs.channel[loopIdx] > 0 )
+                kill( globalArgs.channel[loopIdx], SIGTERM );
+        }
     }
     return 0;
 }
@@ -654,7 +660,7 @@ int ConnectViaMedia(int sockFd, int channel)
         0x03, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
     
     retval = send(sockFd, (char*)(&bloginBuf), sizeof(bloginBuf), 0);
-
+    
     retval = recv(sockFd, &recvBuf, sizeof(recvBuf), 0);
     retval = recv(sockFd, &recvBuf, sizeof(recvBuf), 0);
     
