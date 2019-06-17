@@ -19,16 +19,17 @@
 #include <sys/wait.h>
 #include <stdbool.h>
 #include <stdarg.h>
-#include <sys/stat.h>
+#include <time.h>
+#include <utime.h>
 
 
 
-#define MAX_CHANNELS 8		// maximum channels to support
+#define MAX_CHANNELS 8		// maximum channels to support (I've only seen max of 16).
 
 struct globalArgs_t {
     bool verbose;			// -v duh
     char *pipeName;			// -n name to use for filename (ch # will be appended)
-    bool channel[MAX_CHANNELS];     // -c (support up to 16)
+    bool channel[MAX_CHANNELS];
     char *hostname;			// -s hostname to connect to
     unsigned short port;		// -p port number
     int timer;			// -t alarm timer
@@ -64,6 +65,9 @@ void printBuffer(char *pbuf, size_t len)
 
 int main(int argc, char**argv)
 {
+    srand(time(0));
+    while (1)
+    {
     char pipename[256];
     char ffCmd[2048];
     struct addrinfo hints, *server;
@@ -170,8 +174,7 @@ int main(int argc, char**argv)
     
     serverAddr.sin_addr = ((struct sockaddr_in*)server->ai_addr)->sin_addr;
     serverAddr.sin_port = htons(globalArgs.port);
-    
-    
+
     do
     {
         if( pid )
@@ -217,24 +220,25 @@ int main(int argc, char**argv)
     if( g_processCh != -1 )
     {
         // At this point, g_processCh contains the camera number to use
-        sprintf(pipename, "/tmp/%s%i", globalArgs.pipeName, g_processCh);
+        sprintf(pipename, "/tmp/cam%irand%i", g_processCh, rand());
         
         tv.tv_sec = 5;		// Wait 5 seconds for socket data
         tv.tv_usec = 0;
         
         FILE *ffmpegP = NULL;
         
-        sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i /tmp/zmodo%i -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", g_processCh, g_processCh+1);
+        sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", pipename, g_processCh+1);
         
         
 #ifndef DOMAIN_SOCKETS
-        
+        //unlink(pipename);
         retval = mkfifo(pipename, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
         
         if( retval != 0 )
         {
             sprintf(g_errBuf, "Ch %i: Failed to create pipe\n", g_processCh+1);
             perror(g_errBuf);
+            
         }
         
 #endif	
@@ -359,28 +363,14 @@ int main(int argc, char**argv)
                     if( globalArgs.verbose )
                         printMessage(true, "Socket closed. Receive result: %i\n", read);
                     
-                    pclose (ffmpegP);
-                    ffmpegP = NULL;
                     close(sockFd);
                     sockFd = -1;
                     break;
                 }
                 
-                struct stat st;
-                char fileloc[256];
-                sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
-                stat(fileloc, &st);
-                int fsize1 = st.st_size;
                 
-                if( fsize1 == 1957 ){
-                    printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
-                    remove(fileloc);
-                    pclose (ffmpegP);
-                    ffmpegP = NULL;
-                    close(sockFd);
-                    sockFd = -1;
-                    break;
-                }
+                
+
                              
                 if( globalArgs.verbose )
                 {
@@ -401,7 +391,6 @@ int main(int argc, char**argv)
                     
                     if( bind(outPipe, (struct sockaddr*)&addr, sizeof(addr)) == -1 )
                         perror("Error binding socket\n");
-                    
                     if(ffmpegP == NULL){
                         printMessage(true, "opening ffmpeg\n");
                         ffmpegP = popen (ffCmd, "r");
@@ -417,7 +406,6 @@ int main(int argc, char**argv)
                 
                 if( outPipe == -1 ){
                     outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
-                    
                     if(ffmpegP == NULL){
                         printMessage(true, "opening ffmpeg\n");
                         ffmpegP = popen (ffCmd, "r");
@@ -430,9 +418,39 @@ int main(int argc, char**argv)
                 
 #endif
                 
+                struct stat st;
+                char fileloc[256];
+                sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
+                stat(fileloc, &st);
+                int fsize1 = st.st_size;
+                
+                if( fsize1 < 2500 && fsize1 > 10 ){
+                    printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
+                    remove(fileloc);
+                    pclose (ffmpegP);
+                    ffmpegP = NULL;
+                    close(sockFd);
+                    sockFd = -1;
+                    break;
+                }
+                time_t rawtime;
+                time ( &rawtime );
+                
+                if( difftime(rawtime, st.st_mtime) > 30 ){
+                    printMessage(true, "Stream %i FFMpeg output lagging, restarting FFMpeg\n",g_processCh+1);
+                    pclose (ffmpegP);
+                    ffmpegP = NULL;
+                    ffmpegP = popen (ffCmd, "r");
+                    
+                    struct utimbuf new_times;
+                    new_times.actime = st.st_atime;
+                    new_times.modtime = time(NULL);
+                    utime(fileloc, &new_times);
+                }
+                
                 // send to pipe
                 if( outPipe != -1 )
-                {
+                {       
                     if( (retval = write(outPipe, recvBuf, read)) == -1)
                     {
                         if( errno == EAGAIN || errno == EWOULDBLOCK )
@@ -440,7 +458,6 @@ int main(int argc, char**argv)
                             if( globalArgs.verbose )
                                 printMessage(true, "\nCh %i: %s", g_processCh+1, "Reader isn't reading fast enough, discarding data. Not enough processing power?\n");
                             
-                            // Right now we discard data, should be a way to buffer maybe?
                             continue;
                         }
                         // reader closed the pipe, wait for it to be opened again.
@@ -450,12 +467,10 @@ int main(int argc, char**argv)
                             perror(g_errBuf);
                         }
                         
+#ifndef DOMAIN_SOCKETS
                         printMessage(true, "Closing ffmpeg\n");
                         pclose (ffmpegP);
                         ffmpegP = NULL;
-                        
-#ifndef DOMAIN_SOCKETS
-                        
                         close(outPipe);
                         outPipe = -1;
                         
@@ -486,17 +501,15 @@ int main(int argc, char**argv)
                     close(sockFd);
                 
                 sockFd = -1;
-                pclose (ffmpegP);
-                ffmpegP = NULL;
                 
                 if( g_cleanUp != 3 )
                 {
                     if( outPipe != -1 ){
-                        // pclose (ffmpegP);
+                        pclose (ffmpegP);
+                        ffmpegP = NULL;
                         close(outPipe);
+                        outPipe = -1;
                     }
-                    outPipe = -1;
-                    //ffmpegP = NULL;
                 }
             }
         }
@@ -506,9 +519,10 @@ int main(int argc, char**argv)
         printMessage(true, "closing ffmpeg\n");
         
         pclose (ffmpegP);
+        ffmpegP = NULL;
+        
         close(outPipe);
         outPipe = -1;
-        ffmpegP = NULL;
         close(sockFd);
         unlink(pipename);
     }
@@ -525,6 +539,7 @@ int main(int argc, char**argv)
     {
         if( globalArgs.channel[loopIdx] > 0 )
             kill( globalArgs.channel[loopIdx], SIGTERM );
+    }
     }
     return 0;
 }
