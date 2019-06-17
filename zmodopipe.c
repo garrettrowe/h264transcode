@@ -28,11 +28,9 @@
 
 struct globalArgs_t {
     bool verbose;			// -v duh
-    char *pipeName;			// -n name to use for filename (ch # will be appended)
     bool channel[MAX_CHANNELS];
     char *hostname;			// -s hostname to connect to
     unsigned short port;		// -p port number
-    int timer;			// -t alarm timer
 } globalArgs = {0};
 
 extern char *optarg;
@@ -45,7 +43,7 @@ int g_processCh = -1;	// Channel this process will be in charge of (-1 means par
 void sigHandler(int sig);
 void display_usage(char *name);
 int printMessage(bool verbose, const char *message, ...);
-int ConnectViaMedia(int sockFd, int channel);
+int connectStream(int sockFd, int channel);
 
 void printBuffer(char *pbuf, size_t len)
 {
@@ -93,12 +91,9 @@ int main(int argc, char**argv)
         lngr.l_onoff = false;
         lngr.l_linger = 0;
         
-        // Process arguments
-        // Clear and set defaults
         memset(&globalArgs, 0, sizeof(globalArgs));
         
-        globalArgs.hostname =
-        globalArgs.pipeName = "zmodo";
+        globalArgs.hostname = "";
         
         // Read command-line
         while( ((opt = getopt(argc, argv, optString)) != -1) && (opt != 255))
@@ -111,17 +106,11 @@ int main(int argc, char**argv)
                 case 'c':
                     globalArgs.channel[atoi(optarg) - 1] = true;
                     break;
-                case 'n':
-                    globalArgs.pipeName = optarg;
-                    break;
                 case 's':
                     globalArgs.hostname = optarg;
                     break;
                 case 'p':
                     globalArgs.port = atoi(optarg);
-                    break;
-                case 't':
-                    globalArgs.timer = atoi(optarg);
                     break;
                 case 'h':
                     // Fall through
@@ -300,9 +289,9 @@ int main(int argc, char**argv)
                 
                 retval = 0;
                 
-                if( ConnectViaMedia(sockFd, g_processCh) != 0 )
+                if( connectStream(sockFd, g_processCh) != 0 )
                 {
-                    printMessage(true, "Login failed, bailing.\nDid you select the right model?\n");
+                    printMessage(true, "Connect failed.\n");
                     close(sockFd);
                     sockFd = -1;
                     return 1;
@@ -316,10 +305,6 @@ int main(int argc, char**argv)
                 FD_ZERO(&readfds);
                 FD_SET(sockFd, &readfds	);
 #endif
-                // the stream sometimes goes grey,
-                // this alarm should periodically reset the stream
-                if(globalArgs.timer)
-                    alarm(globalArgs.timer);
                 
                 // Now we are connected and awaiting stream
                 do
@@ -349,7 +334,6 @@ int main(int argc, char**argv)
                     
                     read  = recv(sockFd, recvBuf, sizeof(recvBuf), 0);
                     
-                    // Server disconnected, close the socket so we can try to reconnect
                     if( read <= 0 )
                     {
 #ifdef NON_BLOCK_READ
@@ -367,10 +351,6 @@ int main(int argc, char**argv)
                         sockFd = -1;
                         break;
                     }
-                    
-                    
-                    
-                    
                     
                     if( globalArgs.verbose )
                     {
@@ -426,11 +406,8 @@ int main(int argc, char**argv)
                     
                     if( fsize1 < 2500 && fsize1 > 10 ){
                         printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
-                        remove(fileloc);
-                        pclose (ffmpegP);
-                        ffmpegP = NULL;
-                        close(sockFd);
-                        sockFd = -1;
+                        //remove(fileloc);
+                        g_cleanUp = 2;
                         break;
                     }
                     time_t rawtime;
@@ -440,18 +417,10 @@ int main(int argc, char**argv)
                     
                     if(  dt > 30 && dt < 40000 ){
                         printMessage(true, "Stream %i FFMpeg output lagging by %i, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
-                        remove(fileloc);
-                        pclose (ffmpegP);
-                        ffmpegP = NULL;
-                        close(sockFd);
-                        sockFd = -1;
+                        //remove(fileloc);
+                        g_cleanUp = 2;
                         break;
-                        /*
-                         struct utimbuf new_times;
-                         new_times.actime = st.st_atime;
-                         new_times.modtime = time(NULL);
-                         utime(fileloc, &new_times);
-                         */
+
                     }
                     
                     // send to pipe
@@ -475,8 +444,6 @@ int main(int argc, char**argv)
                             
 #ifndef DOMAIN_SOCKETS
                             printMessage(true, "Closing ffmpeg\n");
-                            pclose (ffmpegP);
-                            ffmpegP = NULL;
                             close(outPipe);
                             outPipe = -1;
                             
@@ -497,36 +464,19 @@ int main(int argc, char**argv)
                 }
                 while( sockFd != -1 && !g_cleanUp );
                 
-                // If we receive a SIGUSR1, close and reset everything
-                // Then start the loop over again.
                 if( g_cleanUp >= 2 )
                 {
                     g_cleanUp = false;
-                    
                     if( sockFd != -1 )
                         close(sockFd);
-                    
                     sockFd = -1;
-                    
-                    if( g_cleanUp != 3 )
-                    {
-                        if( outPipe != -1 ){
-                            pclose (ffmpegP);
-                            ffmpegP = NULL;
-                            close(outPipe);
-                            outPipe = -1;
-                        }
-                    }
                 }
             }
             if( globalArgs.verbose )
                 printMessage(true, "Exiting loop: %i\n", g_cleanUp);
-            // Received signal to exit, cleanup
-            printMessage(true, "closing ffmpeg\n");
             
             pclose (ffmpegP);
             ffmpegP = NULL;
-            
             close(outPipe);
             outPipe = -1;
             close(sockFd);
@@ -540,29 +490,14 @@ int main(int argc, char**argv)
         sigaction(SIGUSR1, &oldsahup, NULL);
         freeaddrinfo(server);
         
-        // Kill all children (if any)
-        for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
-        {
-            if( globalArgs.channel[loopIdx] > 0 )
-                kill( globalArgs.channel[loopIdx], SIGTERM );
+        if( g_processCh == -1 ){
+            for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+            {
+                if( globalArgs.channel[loopIdx] > 0 )
+                    kill( globalArgs.channel[loopIdx], SIGTERM );
+            }
         }
     }
-    return 0;
-}
-
-int isH264iFrame(char paket[])
-{
-    int RTPHeaderBytes = 0;
-    
-    int fragment_type = paket[RTPHeaderBytes + 0] & 0x1F;
-    int nal_type = paket[RTPHeaderBytes + 1] & 0x1F;
-    int start_bit = paket[RTPHeaderBytes + 1] & 0x80;
-    
-    if (((fragment_type == 28 || fragment_type == 29) && nal_type == 5 && start_bit == 128) || fragment_type == 5)
-    {
-        return 1;
-    }
-    
     return 0;
 }
 
@@ -571,13 +506,9 @@ void display_usage(char *name)
     printf("Usage: %s [options]\n\n", name);
     printf("Where [options] is one of:\n\n"
            "    -s <string>\tIP to connect to\n"
-           "    -t <int>\tSend a timer interrupt every x seconds.\n"
            "    -p <int>\tPort number to connect to\n"
            "    -c <int>\tChannels to stream (can be specified multiple times)\n"
-           "    -n <string>\tBase filename of pipe (ch# will be appended)\n"
            "    -v\t\tVerbose output\n"
-           "    -u <string>\tUsername\n"
-           "    -a <string>\tPassword\n"
            "\n");
 }
 
@@ -623,7 +554,7 @@ int printMessage(bool verbose, const char *message, ...)
 }
 
 
-int ConnectViaMedia(int sockFd, int channel)
+int connectStream(int sockFd, int channel)
 {
     int retval;
     char recvBuf[1500];
