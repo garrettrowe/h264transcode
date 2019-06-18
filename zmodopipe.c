@@ -64,148 +64,150 @@ void printBuffer(char *pbuf, size_t len)
 int main(int argc, char**argv)
 {
     srand(time(0));
-    while (1)
-    {
-        char pipename[256];
-        char ffCmd[2048];
-        struct addrinfo hints, *server;
-        struct sockaddr_in serverAddr;
-        int retval = 0;
-        char recvBuf[2048];
-        struct sigaction sapipe, oldsapipe, saterm, oldsaterm, saint, oldsaint, sahup, oldsahup;
-        char opt;
-        int loopIdx;
-        int outPipe = -1;
+    
+    char pipename[256];
+    char ffCmd[2048];
+    struct addrinfo hints, *server;
+    struct sockaddr_in serverAddr;
+    int retval = 0;
+    char recvBuf[2048];
+    struct sigaction sapipe, oldsapipe, saterm, oldsaterm, saint, oldsaint, sahup, oldsahup;
+    char opt;
+    int loopIdx;
+    int outPipe = -1;
 #ifdef DOMAIN_SOCKETS
-        struct sockaddr_un addr;
+    struct sockaddr_un addr;
 #endif
-        int sockFd = -1;
-        struct timeval tv;
+    int sockFd = -1;
+    struct timeval tv;
 #ifdef NON_BLOCK_READ
-        struct timeval tv, tv_sel;
+    struct timeval tv, tv_sel;
 #endif
-        struct linger lngr;
-        int status = 0;
-        int pid = 0;
-        
-        lngr.l_onoff = false;
-        lngr.l_linger = 0;
-        
-        memset(&globalArgs, 0, sizeof(globalArgs));
-        
-        globalArgs.hostname = "";
-        
-        // Read command-line
-        while( ((opt = getopt(argc, argv, optString)) != -1) && (opt != 255))
+    struct linger lngr;
+    int status = 0;
+    int pid = 0;
+    
+    lngr.l_onoff = false;
+    lngr.l_linger = 0;
+    
+    memset(&globalArgs, 0, sizeof(globalArgs));
+    
+    globalArgs.hostname = "";
+    
+    // Read command-line
+    while( ((opt = getopt(argc, argv, optString)) != -1) && (opt != 255))
+    {
+        switch( opt )
         {
-            switch( opt )
-            {
-                case 'v':
-                    globalArgs.verbose = true;
-                    break;
-                case 'c':
-                    globalArgs.channel[atoi(optarg) - 1] = true;
-                    break;
-                case 's':
-                    globalArgs.hostname = optarg;
-                    break;
-                case 'p':
-                    globalArgs.port = atoi(optarg);
-                    break;
-                case 'h':
-                    // Fall through
-                case '?':
-                    // Fall through
-                default:
-                    display_usage(argv[0]);
-                    return 0;
-            }
+            case 'v':
+                globalArgs.verbose = true;
+                break;
+            case 'c':
+                globalArgs.channel[atoi(optarg) - 1] = true;
+                break;
+            case 's':
+                globalArgs.hostname = optarg;
+                break;
+            case 'p':
+                globalArgs.port = atoi(optarg);
+                break;
+            case 'h':
+                // Fall through
+            case '?':
+                // Fall through
+            default:
+                display_usage(argv[0]);
+                return 0;
         }
-        
-        // Set up default values based on provided values (if any)
-        if( !globalArgs.port )
+    }
+    
+    // Set up default values based on provided values (if any)
+    if( !globalArgs.port )
+    {
+        globalArgs.port = 9000;
+    }
+    
+    memset(&saint, 0, sizeof(saint));
+    memset(&saterm, 0, sizeof(saterm));
+    memset(&sahup, 0, sizeof(sahup));
+    
+    // Ignore SIGPIPE
+    sapipe.sa_handler = sigHandler;
+    sigaction(SIGPIPE, &sapipe, &oldsapipe);
+    
+    // Handle SIGTERM & SIGING
+    saterm.sa_handler = sigHandler;
+    sigaction(SIGTERM, &saterm, &oldsaterm);
+    saint.sa_handler = sigHandler;
+    sigaction(SIGINT, &saint, &oldsaint);
+    
+    signal( SIGUSR1, SIG_IGN );		// Ignore SIGUSR1 in parent process
+    
+    // SIGUSR2 is used to reset the pipe and connection
+    sahup.sa_handler = sigHandler;
+    sigaction(SIGUSR2, &sahup, &oldsahup);
+    
+    memset(&serverAddr, 0, sizeof(serverAddr));
+    serverAddr.sin_family = AF_INET;
+    
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_protocol = IPPROTO_TCP;
+    retval = getaddrinfo(globalArgs.hostname, NULL, &hints, &server);
+    if( retval != 0 )
+    {
+        printMessage(false, "getaddrinfo failed: %s\n", gai_strerror(retval));
+        return 1;
+    }
+    
+    serverAddr.sin_addr = ((struct sockaddr_in*)server->ai_addr)->sin_addr;
+    serverAddr.sin_port = htons(globalArgs.port);
+    
+    
+    do
+    {
+        if( pid )
         {
-            globalArgs.port = 9000;
-        }
-        
-        memset(&saint, 0, sizeof(saint));
-        memset(&saterm, 0, sizeof(saterm));
-        memset(&sahup, 0, sizeof(sahup));
-        
-        // Ignore SIGPIPE
-        sapipe.sa_handler = sigHandler;
-        sigaction(SIGPIPE, &sapipe, &oldsapipe);
-        
-        // Handle SIGTERM & SIGING
-        saterm.sa_handler = sigHandler;
-        sigaction(SIGTERM, &saterm, &oldsaterm);
-        saint.sa_handler = sigHandler;
-        sigaction(SIGINT, &saint, &oldsaint);
-        
-        signal( SIGUSR1, SIG_IGN );		// Ignore SIGUSR1 in parent process
-        
-        // SIGUSR2 is used to reset the pipe and connection
-        sahup.sa_handler = sigHandler;
-        sigaction(SIGUSR2, &sahup, &oldsahup);
-        
-        memset(&serverAddr, 0, sizeof(serverAddr));
-        serverAddr.sin_family = AF_INET;
-        
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_protocol = IPPROTO_TCP;
-        retval = getaddrinfo(globalArgs.hostname, NULL, &hints, &server);
-        if( retval != 0 )
-        {
-            printMessage(false, "getaddrinfo failed: %s\n", gai_strerror(retval));
-            return 1;
-        }
-        
-        serverAddr.sin_addr = ((struct sockaddr_in*)server->ai_addr)->sin_addr;
-        serverAddr.sin_port = htons(globalArgs.port);
-        
-        do
-        {
-            if( pid )
-            {
-                printMessage(true, "Child %i returned: %i\n", pid, status);
-                
-                if( g_cleanUp == 2 )
-                    g_cleanUp = false;	// Ignore SIGHUP
-            }
+            printMessage(true, "Child %i returned: %i\n", pid, status);
             
-            // Create a fork for each camera channel to stream
-            for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+            if( g_cleanUp == 2 )
+                g_cleanUp = false;	// Ignore SIGHUP
+        }
+        
+        // Create a fork for each camera channel to stream
+        for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
+        {
+            //static bool hitFirst = false;
+            if( globalArgs.channel[loopIdx] == true )
             {
-                //static bool hitFirst = false;
-                if( globalArgs.channel[loopIdx] == true )
+                // Always fork if we're starting up, or if the pid of the dead child process matches
+                if( pid == 0 || g_childPids[loopIdx] == pid )
+                    g_childPids[loopIdx] = fork();
+                
+                // Child Process
+                if( g_childPids[loopIdx] == 0 )
                 {
-                    // Always fork if we're starting up, or if the pid of the dead child process matches
-                    if( pid == 0 || g_childPids[loopIdx] == pid )
-                        g_childPids[loopIdx] = fork();
+                    // SIGUSR1 is used to reset the pipe and connection
+                    sahup.sa_handler = sigHandler;
+                    sigaction(SIGUSR1, &sahup, &oldsahup);
                     
-                    // Child Process
-                    if( g_childPids[loopIdx] == 0 )
-                    {
-                        // SIGUSR1 is used to reset the pipe and connection
-                        sahup.sa_handler = sigHandler;
-                        sigaction(SIGUSR1, &sahup, &oldsahup);
-                        
-                        memset(g_childPids, 0, sizeof(g_childPids));
-                        g_processCh = loopIdx;
-                        break;
-                    }
-                    // Error
-                    else if( g_childPids[loopIdx] == -1 )
-                    {
-                        printMessage(false, "fork failed\n");
-                        return 1;
-                    }
+                    memset(g_childPids, 0, sizeof(g_childPids));
+                    g_processCh = loopIdx;
+                    break;
+                }
+                // Error
+                else if( g_childPids[loopIdx] == -1 )
+                {
+                    printMessage(false, "fork failed\n");
+                    return 1;
                 }
             }
         }
-        while( (pid = wait(&status)) > 0  && g_cleanUp != true );
-        
+    }
+    while( (pid = wait(&status)) > 0  && g_cleanUp != true );
+    
+    while (1)
+    {
         if( g_processCh != -1 )
         {
             // At this point, g_processCh contains the camera number to use
@@ -218,9 +220,6 @@ int main(int argc, char**argv)
             
             sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", pipename, g_processCh+1);
             
-            
-#ifndef DOMAIN_SOCKETS
-            //unlink(pipename);
             retval = mkfifo(pipename, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
             
             if( retval != 0 )
@@ -230,7 +229,6 @@ int main(int argc, char**argv)
                 
             }
             
-#endif	
             
             while( !g_cleanUp )
             {
@@ -398,30 +396,7 @@ int main(int argc, char**argv)
                     
 #endif
                     
-                    struct stat st;
-                    char fileloc[256];
-                    sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
-                    stat(fileloc, &st);
-                    int fsize1 = st.st_size;
                     
-                    if( fsize1 < 2500 && fsize1 > 10 ){
-                        printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
-                        //remove(fileloc);
-                        g_cleanUp = 2;
-                        break;
-                    }
-                    time_t rawtime;
-                    time ( &rawtime );
-                    
-                    int dt = difftime(rawtime, st.st_mtime);
-                    
-                    if(  dt > 30 && dt < 40000 ){
-                        printMessage(true, "Stream %i FFMpeg output lagging by %i, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
-                        //remove(fileloc);
-                        g_cleanUp = 2;
-                        break;
-
-                    }
                     
                     // send to pipe
                     if( outPipe != -1 )
@@ -443,7 +418,6 @@ int main(int argc, char**argv)
                             }
                             
 #ifndef DOMAIN_SOCKETS
-                            printMessage(true, "Closing ffmpeg\n");
                             close(outPipe);
                             outPipe = -1;
                             
@@ -461,41 +435,60 @@ int main(int argc, char**argv)
                             }
                         }
                     }
+                    struct stat st;
+                    memset( &st, 0, sizeof(struct stat) );
+                    char fileloc[256];
+                    sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
+                    stat(fileloc, &st);
+                    int fsize1 = st.st_size;
+                    
+                    if( fsize1 < 2500 && fsize1 > 10 ){
+                        printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
+                        remove(fileloc);
+                        g_cleanUp = 4;
+                    }
+                    memset( &st, 0, sizeof(struct stat) );
+                    time_t rawtime;
+                    time ( &rawtime );
+                    stat(pipename, &st);
+                    
+                    double dt = difftime(rawtime, st.st_mtime);
+                    
+                    if(  dt > 30 && dt < 40000 ){
+                        printMessage(true, "Stream %i FFMpeg output lagging by %f, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
+                        remove(fileloc);
+                        g_cleanUp = 4;
+                    }
                 }
                 while( sockFd != -1 && !g_cleanUp );
-                
-                if( g_cleanUp >= 2 )
-                {
-                    g_cleanUp = false;
-                    if( sockFd != -1 )
-                        close(sockFd);
-                    sockFd = -1;
-                }
             }
-            if( globalArgs.verbose )
-                printMessage(true, "Exiting loop: %i\n", g_cleanUp);
+            if( g_cleanUp >= 2 )
+                g_cleanUp = false;
             
             pclose (ffmpegP);
             ffmpegP = NULL;
             close(outPipe);
             outPipe = -1;
             close(sockFd);
+            sockFd = -1;
             unlink(pipename);
         }
-        
-        // Restore old signal handler
-        sigaction(SIGPIPE, &oldsapipe, NULL);
-        sigaction(SIGTERM, &oldsaterm, NULL);
-        sigaction(SIGINT, &oldsaint, NULL);
-        sigaction(SIGUSR1, &oldsahup, NULL);
-        freeaddrinfo(server);
-        
-        if( g_processCh == -1 ){
+        else if( g_processCh == -1 && g_cleanUp == true && g_cleanUp < 2){
             for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
             {
                 if( globalArgs.channel[loopIdx] > 0 )
                     kill( globalArgs.channel[loopIdx], SIGTERM );
             }
+            // Restore old signal handler
+            sigaction(SIGPIPE, &oldsapipe, NULL);
+            sigaction(SIGTERM, &oldsaterm, NULL);
+            sigaction(SIGINT, &oldsaint, NULL);
+            sigaction(SIGUSR1, &oldsahup, NULL);
+            freeaddrinfo(server);
+            
+            if( globalArgs.verbose )
+                printMessage(true, "Exiting program: %i\n", g_cleanUp);
+            break;
         }
     }
     return 0;
