@@ -476,8 +476,10 @@ int main(int argc, char**argv)
         else if( g_processCh == -1 && g_cleanUp == true && g_cleanUp < 2){
             for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
             {
-                if( globalArgs.channel[loopIdx] > 0 )
+                if( globalArgs.channel[loopIdx] > 0 ){
+                    printMessage(true, "Killing Child process: %i\n", globalArgs.channel[loopIdx]);
                     kill( globalArgs.channel[loopIdx], SIGTERM );
+                }
             }
             // Restore old signal handler
             sigaction(SIGPIPE, &oldsapipe, NULL);
