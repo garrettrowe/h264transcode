@@ -48,7 +48,6 @@ int connectStream(int sockFd, int channel);
 void printBuffer(char *pbuf, size_t len)
 {
     int n;
-    
     printMessage(false, "Length: %lu\n", (unsigned long)len);
     for(n=0; n < len ; n++)
     {
@@ -57,7 +56,6 @@ void printBuffer(char *pbuf, size_t len)
         if( ((n + 1) % 8) == 0 )
             printf(" ");		// Make hex string slightly more readable
     }
-    
     printf("\n");
 }
 
@@ -219,7 +217,7 @@ int main(int argc, char**argv)
             
             char fileloc[256];
             sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
-          
+            
             char* ffLCmd[] = {"ffmpeg", "-y", "-f",  "h264", "-framerate", "1", "-i", pipename,  "-s",  "390x220",  "-r",  "1/2",  "-update",  "1",  "-f",  "image2", fileloc, NULL};
             sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg", pipename, g_processCh+1);
             
@@ -375,13 +373,13 @@ int main(int argc, char**argv)
                     }
                     
 #else
-                
+                    
                     if( outPipe == -1 ){
                         outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
                     }
                     
 #endif
-        
+                    
                     if (ffmpegPid == -1){
                         if ((ffmpegPid = fork()) < 0) {
                             printMessage(true, "Error creating ffmpeg fork\n");
@@ -472,7 +470,7 @@ int main(int argc, char**argv)
                 }
                 while( sockFd != -1 && !g_cleanUp );
             }
-            if( g_cleanUp > 3 )
+            if( g_cleanUp > 1 )
                 g_cleanUp = false;
             
             printMessage(true, "Cleaning up\n");
@@ -484,7 +482,7 @@ int main(int argc, char**argv)
             close(sockFd);
             sockFd = -1;
             unlink(pipename);
-            if( g_cleanUp)
+            if( g_cleanUp == 1)
                 break;
         }
         else if( g_processCh == -1 && g_cleanUp == true && g_cleanUp < 2){
@@ -530,7 +528,7 @@ void sigHandler(int sig)
         case SIGTERM:
         case SIGINT:
             // Kill the main loop
-            g_cleanUp = true;
+            g_cleanUp = 1;
             break;
         case SIGUSR1:
         case SIGALRM:
