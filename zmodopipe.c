@@ -369,14 +369,7 @@ int main(int argc, char**argv)
                         
                         if( bind(outPipe, (struct sockaddr*)&addr, sizeof(addr)) == -1 )
                             perror("Error binding socket\n");
-                        if(ffmpegP == NULL){
-                            printMessage(true, "opening ffmpeg\n");
-                            ffmpegP = popen (ffCmd, "r");
-                            if (!ffmpegP)
-                            {
-                                printMessage(true, "failed to open ffmpeg\n");
-                            }
-                        }
+                        
                     }
                     
 #else
@@ -384,18 +377,17 @@ int main(int argc, char**argv)
                     
                     if( outPipe == -1 ){
                         outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
-                        if(ffmpegP == NULL){
-                            printMessage(true, "opening ffmpeg\n");
-                            ffmpegP = popen (ffCmd, "r");
-                            if (!ffmpegP)
-                            {
-                                printMessage(true, "failed to open ffmpeg\n");
-                            }
-                        }
                     }
                     
 #endif
-                    
+                    if(ffmpegP == NULL){
+                        printMessage(true, "opening ffmpeg\n");
+                        ffmpegP = popen (ffCmd, "r");
+                        if (!ffmpegP)
+                        {
+                            printMessage(true, "failed to open ffmpeg\n");
+                        }
+                    }
                     
                     
                     // send to pipe
