@@ -436,6 +436,9 @@ int main(int argc, char**argv)
                         }
                     }
                     struct stat st;
+                    time_t rawtime;
+                    time ( &rawtime );
+                    
                     memset( &st, 0, sizeof(struct stat) );
                     char fileloc[256];
                     sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
@@ -446,18 +449,29 @@ int main(int argc, char**argv)
                         printMessage(true, "Stream %i ouput pic size %i, reconnecting\n",g_processCh+1,fsize1);
                         remove(fileloc);
                         g_cleanUp = 4;
+                        break;
                     }
-                    memset( &st, 0, sizeof(struct stat) );
-                    time_t rawtime;
-                    time ( &rawtime );
-                    stat(pipename, &st);
                     
                     double dt = difftime(rawtime, st.st_mtime);
                     
                     if(  dt > 30 && dt < 40000 ){
                         printMessage(true, "Stream %i FFMpeg output lagging by %f, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
+                        char* tarr[] = {"touch", fileloc, NULL};
+                        execvp("touch", tarr);
+                        char* karr[] = {"pkill", "-9", "-f", ffCmd, NULL};
+                        execvp("pkill", karr);
+                    }
+                    
+                    memset( &st, 0, sizeof(struct stat) );
+                    stat(pipename, &st);
+                    
+                    dt = difftime(rawtime, st.st_mtime);
+                    
+                    if(  dt > 30 && dt < 40000 ){
+                        printMessage(true, "Stream %i FFMpeg input pipe lagging by %f, restarting pipe\n",g_processCh+1, difftime(rawtime, st.st_mtime));
                         remove(fileloc);
                         g_cleanUp = 4;
+                        break;
                     }
                 }
                 while( sockFd != -1 && !g_cleanUp );
@@ -467,6 +481,8 @@ int main(int argc, char**argv)
             
             pclose (ffmpegP);
             ffmpegP = NULL;
+            char* karr[] = {"pkill", "-9", "-f", ffCmd, NULL};
+            execvp("pkill", karr);
             close(outPipe);
             outPipe = -1;
             close(sockFd);
