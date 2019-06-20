@@ -75,6 +75,7 @@ int main(int argc, char**argv)
     char opt;
     int loopIdx;
     int outPipe = -1;
+    pid_t ffmpegPid = -1;
 #ifdef DOMAIN_SOCKETS
     struct sockaddr_un addr;
 #endif
@@ -216,9 +217,11 @@ int main(int argc, char**argv)
             tv.tv_sec = 10;		// Wait 5 seconds for socket data
             tv.tv_usec = 0;
             
-            FILE *ffmpegP = NULL;
-            
-            sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg &", pipename, g_processCh+1);
+            char fileloc[256];
+            sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
+          
+            char* ffLCmd[] = {"ffmpeg", "-y", "-f",  "h264", "-framerate", "1", "-i", pipename,  "-s",  "390x220",  "-r",  "1/2",  "-update",  "1",  "-f",  "image2", fileloc, NULL};
+            sprintf(ffCmd, "ffmpeg -y -f h264 -framerate 1 -i %s -s 390x220  -r 1/2 -update 1 -f image2  /var/www/html/%i.jpg", pipename, g_processCh+1);
             
             retval = mkfifo(pipename, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
             
@@ -304,7 +307,7 @@ int main(int argc, char**argv)
                 FD_SET(sockFd, &readfds	);
 #endif
                 
-                // Now we are connected and awaiting stream
+                printMessage(true, "Connected and awaiting stream\n");
                 do
                 {
                     int read = 0;
@@ -369,28 +372,30 @@ int main(int argc, char**argv)
                         
                         if( bind(outPipe, (struct sockaddr*)&addr, sizeof(addr)) == -1 )
                             perror("Error binding socket\n");
-                        
                     }
                     
 #else
-                    // Open the pipe if it wasn't previously opened
-                    
+                
                     if( outPipe == -1 ){
                         outPipe = open(pipename, O_WRONLY | O_NONBLOCK);
                     }
                     
 #endif
-                    if(ffmpegP == NULL){
-                        printMessage(true, "opening ffmpeg\n");
-                        ffmpegP = popen (ffCmd, "r");
-                        if (!ffmpegP)
-                        {
-                            printMessage(true, "failed to open ffmpeg\n");
+        
+                    if (ffmpegPid == -1){
+                        if ((ffmpegPid = fork()) < 0) {
+                            printMessage(true, "Error creating ffmpeg fork\n");
+                            ffmpegPid = -1;
                         }
+                        else if (ffmpegPid == 0) {
+                            if (execvp("ffmpeg", ffLCmd) < 0) {
+                                printMessage(true, "Error returned from ffmpeg\n");
+                                ffmpegPid = -1;
+                            }
+                        }
+                        sleep(1);
                     }
                     
-                    
-                    // send to pipe
                     if( outPipe != -1 )
                     {
                         if( (retval = write(outPipe, recvBuf, read)) == -1)
@@ -432,8 +437,7 @@ int main(int argc, char**argv)
                     time ( &rawtime );
                     
                     memset( &st, 0, sizeof(struct stat) );
-                    char fileloc[256];
-                    sprintf(fileloc, "/var/www/html/%i.jpg", g_processCh+1);
+                    
                     stat(fileloc, &st);
                     int fsize1 = st.st_size;
                     
@@ -450,8 +454,9 @@ int main(int argc, char**argv)
                         printMessage(true, "Stream %i FFMpeg output lagging by %f, restarting FFMpeg\n",g_processCh+1, difftime(rawtime, st.st_mtime));
                         char* tarr[] = {"touch", fileloc, NULL};
                         execvp("touch", tarr);
-                        char* karr[] = {"pkill", "-9", "-f", ffCmd, NULL};
-                        execvp("pkill", karr);
+                        kill(ffmpegPid, SIGKILL);
+                        ffmpegPid = -1;
+                        break;
                     }
                     
                     memset( &st, 0, sizeof(struct stat) );
@@ -461,25 +466,26 @@ int main(int argc, char**argv)
                     
                     if(  dt > 30 && dt < 40000 ){
                         printMessage(true, "Stream %i FFMpeg input pipe lagging by %f, restarting pipe\n",g_processCh+1, difftime(rawtime, st.st_mtime));
-                        remove(fileloc);
                         g_cleanUp = 4;
                         break;
                     }
                 }
                 while( sockFd != -1 && !g_cleanUp );
             }
-            if( g_cleanUp >= 2 )
+            if( g_cleanUp > 3 )
                 g_cleanUp = false;
             
-            pclose (ffmpegP);
-            ffmpegP = NULL;
-            char* karr[] = {"pkill", "-9", "-f", ffCmd, NULL};
-            execvp("pkill", karr);
+            printMessage(true, "Cleaning up\n");
+            
+            kill(ffmpegPid, SIGKILL);
+            ffmpegPid = -1;
             close(outPipe);
             outPipe = -1;
             close(sockFd);
             sockFd = -1;
             unlink(pipename);
+            if( g_cleanUp)
+                break;
         }
         else if( g_processCh == -1 && g_cleanUp == true && g_cleanUp < 2){
             for( loopIdx=0;loopIdx<MAX_CHANNELS;loopIdx++ )
